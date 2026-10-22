@@ -115,3 +115,9 @@ Rscript check_loader.R
 Tests use temporary data, synthetic photographs and mocked API responses. They cover independent splits, duplicate grouping, versioned caches, API failures, stop/resume, confidence gates, per-project data isolation, custom categories, grade filtering, manual priority and private key-file permissions. No API key or paid request is required for these checks. They verify execution and data handling, not biological accuracy on arbitrary species.
 
 License: MIT. This application is not affiliated with iNaturalist or OpenAI.
+
+### Photo selection and cost
+
+Classification defaults to **first photo only** per observation. Unclear first images go to review without automatically submitting more images. All photos remain available for human review. Choose **All photos** in Classify if you want every image assessed; those images must agree. The selection also applies when building a new recipe, and evaluation uses that recipe’s frozen selection. Changing selection requires training and evaluating a new recipe before validated thresholds can be applied. Cached photo answers are reused when available.
+
+The historical baseline test cost $0.528854 for 315 photos, approximately $168 for 100,000 first-photo observations at the same usage. Teaching examples and token usage can increase cost. Start with a small batch and keep a spending limit; requests already in progress can exceed the limit.

@@ -30,15 +30,15 @@ queue<-reactive({
   completed<-ai_results();index<-match(ids,vapply(completed,function(o) as.character(o$id),character(1)))
   for(i in which(keep & !is.na(index))) {
     old<-completed[[index[i]]]
-    if(identical(old$config_id,expected_config_id())&&setequal(as.character(unlist(old$photo_ids)),vapply(observations[[i]]$photos,function(p) as.character(p$id),character(1)))) keep[i]<-FALSE
+    if(identical(old$config_id,expected_config_id())&&setequal(as.character(unlist(old$photo_ids)),vapply(selected_photos(observations[[i]]),function(p) as.character(p$id),character(1)))) keep[i]<-FALSE
   }
   observations[keep]
 })
 run_limits<-reactive({n<-suppressWarnings(as.integer(input$batch_limit));if(length(n)!=1||is.na(n)||n<1||n>10000) n<-100;cost<-suppressWarnings(as.numeric(input$cost_limit));if(length(cost)!=1||!is.finite(cost)||cost<=0||cost>100) cost<-2;list(n=n,cost=cost)})
-output$batch_estimate<-renderText({q<-head(queue(),run_limits()$n);photos<-sum(vapply(q,function(o) length(o$photos),integer(1)));mult<-if(is.null(recipe())) 1 else 1+length(recipe()$examples);sprintf('%d eligible observations · %d photos. Rough estimate $%.2f; examples and token usage affect cost.',length(q),photos,photos*.528854/315*mult)})
+output$batch_estimate<-renderText({q<-head(queue(),run_limits()$n);photos<-sum(vapply(q,function(o) length(selected_photos(o)),integer(1)));mult<-if(is.null(recipe())) 1 else 1+length(recipe()$examples);sprintf('%d eligible observations · %d photos. Rough estimate $%.2f; examples and token usage affect cost.',length(q),photos,photos*.528854/315*mult)})
 key_version<-reactiveVal(0L)
 output$key_status<-renderText({key_version();if(file.exists(api_key_path())||nzchar(Sys.getenv('OPENAI_API_KEY'))) 'Your API key is configured locally.' else 'Add your own OpenAI API key to use Sol.'})
-photo_manifest<-function(o) list(id=as.character(o$id),photos=lapply(o$photos,function(p) {
+photo_manifest<-function(o) list(id=as.character(o$id),photo_mode=photo_mode(),photos=lapply(selected_photos(o),function(p) {
   value<-list(id=as.character(p$id))
   if(length(p$image_path)) value$image_path<-normalizePath(p$image_path) else value$url<-sub('/square\\.','/large.',p$url)
   value
@@ -61,7 +61,7 @@ start_job<-function(command,observations=list()) {
     script<-'sol_classifier.py';args<-character()
   } else {
     script<-'project_model.py';args<-command
-    if(command=='train') {settings<-file.path(run,'project.json');write_json(project(),settings);args<-c(args,'--project',normalizePath(settings))}
+    if(command=='train') {settings<-file.path(run,'project.json');p<-project();p$photo_mode<-photo_mode();write_json(p,settings);args<-c(args,'--project',normalizePath(settings))}
     else args<-c(args,'--recipe',normalizePath(project()$active_recipe))
   }
   args<-c(args,'--input',normalizePath(input_file),'--output',normalizePath(output_path,mustWork=FALSE),'--status',normalizePath(status),'--stop-file',normalizePath(stop_file,mustWork=FALSE),'--budget',as.character(run_limits()$cost),'--data',normalizePath(data_dir()))
@@ -93,8 +93,8 @@ results_table<-reactive({
 output$batch_results<-renderDT(datatable(results_table(),selection='single',rownames=FALSE,options=list(pageLength=10,scrollX=TRUE)))
 observeEvent(input$batch_results_rows_selected,{d<-results_table();i<-input$batch_results_rows_selected;if(length(i)&&i[1]<=nrow(d)&&d$id[i[1]] %in% all_records()$id) {updateSelectInput(session,'queue_filter',selected='all');updateCheckboxGroupInput(session,'review_filter',selected=unname(choices()));selected(d$id[i[1]]);updateTabsetPanel(session,'workspace',selected='photos')}})
 output$export_predictions<-downloadHandler(filename=function() paste0(project()$id,'_ai_results.csv'),content=function(file) {
-  d<-results_table();grades<-rows();d$quality_grade<-grades$quality_grade[match(d$id,grades$id)];d$quality_grade[is.na(d$quality_grade)]<-'unknown';d$project<-rep(project()$name,nrow(d));d$species<-rep(project()$species$name,nrow(d));d$acceptance_policy<-rep(if(is.null(input$acceptance_mode)) 'validated' else input$acceptance_mode,nrow(d));write.csv(d,file,row.names=FALSE)
+  d<-results_table();grades<-rows();d$quality_grade<-grades$quality_grade[match(d$id,grades$id)];d$quality_grade[is.na(d$quality_grade)]<-'unknown';d$photo_mode<-rep(photo_mode(),nrow(d));d$project<-rep(project()$name,nrow(d));d$species<-rep(project()$species$name,nrow(d));d$acceptance_policy<-rep(if(is.null(input$acceptance_mode)) 'validated' else input$acceptance_mode,nrow(d));write.csv(d,file,row.names=FALSE)
 })
 output$overview<-renderUI({d<-all_records();stat<-function(n,label) tags$div(class='stat-card',tags$strong(format(n,big.mark=',',trim=TRUE)),tags$span(label));tags$div(class='overview',stat(nrow(d),'observations in view'),stat(sum(d$manual_morph!='unclassified'),'human labeled'),stat(sum(d$manual_morph=='unclassified'&d$ai_morph %in% keys()),'AI suggestions'),stat(sum(d$morph %in% c('cant_tell','unclassified')),'to identify / review'))})
-output$classifier_summary<-renderUI({if(legacy_mode()) return(tags$p(class='evaluation-note','Original salamander baseline retained: 96.5% agreement among accepted assignments in its 315-photo test. No confidence scores; build and evaluate a new recipe to enable thresholds.'));if(is.null(recipe())) return(tags$p('Train a classifier for this project first.'));tagList(tags$p(paste(length(recipe()$examples),'teaching images · classifier',substr(recipe()$config_id,1,10))),if(is.null(policy())) tags$p(class='evaluation-note','Not evaluated yet. Validated mode sends all assignments to review until a policy is available.') else tags$p(class='evaluation-note','Validated mode applies the saved per-category calibration thresholds. See Train & evaluate for independent test results.'))})
+output$classifier_summary<-renderUI({if(legacy_mode()) return(tags$p(class='evaluation-note','Original salamander baseline retained: 96.5% agreement among accepted assignments in its 315-photo test. No confidence scores; build and evaluate a new recipe to enable thresholds.'));if(is.null(recipe())) return(tags$p('Train a classifier for this project first.'));tagList(if(!identical(recipe_photo_mode(),photo_mode())) tags$p(class='evaluation-note','Photo selection differs from this recipe’s evaluation. Train and evaluate a new recipe with the selected setting to enable validated assignments.'),tags$p(paste(length(recipe()$examples),'teaching images · classifier',substr(recipe()$config_id,1,10))),if(is.null(policy())) tags$p(class='evaluation-note','Not evaluated yet. Validated mode sends all assignments to review until a policy is available.') else tags$p(class='evaluation-note','Validated mode applies the saved per-category calibration thresholds. See Train & evaluate for independent test results.'))})
 session$onSessionEnded(function() {j<-isolate(job());if(!is.null(j)&&j$process$is_alive()) file.create(j$stop_file)})

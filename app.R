@@ -55,10 +55,15 @@ server <- function(input,output,session) {
   recipe <- reactive({p<-project()$active_recipe;if(is.null(p) || identical(p,'legacy')) NULL else read_saved(p,NULL)})
   legacy_mode <- reactive(identical(project()$active_recipe,'legacy'))
   expected_config_id <- reactive(if(legacy_mode()) jsonlite::fromJSON('sol_config.json')$config_id else if(!is.null(recipe())) recipe()$config_id else NULL)
-  policy <- reactive({invalidateLater(2000,session);r<-recipe();if(is.null(r)) return(NULL);p<-read_saved(file.path(dirname(project()$active_recipe),'policy.json'),NULL);if(!is.null(p) && identical(p$config_id,r$config_id)) p else NULL})
+  photo_mode <- reactive(if(identical(input$photo_mode,'all')) 'all' else 'first')
+  selected_photos <- function(o) if(photo_mode()=='first') head(o$photos,1) else o$photos
+  recipe_photo_mode <- reactive(if(is.null(recipe()$settings$photo_mode)) 'all' else recipe()$settings$photo_mode)
+  policy <- reactive({invalidateLater(2000,session);r<-recipe();if(is.null(r) || !identical(recipe_photo_mode(),photo_mode())) return(NULL);p<-read_saved(file.path(dirname(project()$active_recipe),'policy.json'),NULL);if(!is.null(p) && identical(p$config_id,r$config_id)) p else NULL})
   active_predictions <- reactive({
     id<-expected_config_id();if(is.null(id)) return(list())
     r<-Filter(function(o) identical(o$config_id,id),ai_results())
+    observations<-raw();indices<-match(vapply(r,function(o) as.character(o$id),character(1)),vapply(observations,function(o) as.character(o$id),character(1)))
+    r<-r[vapply(seq_along(r),function(i) is.na(indices[i]) || setequal(as.character(unlist(r[[i]]$photo_ids)),vapply(selected_photos(observations[[indices[i]]]),function(p) as.character(p$id),character(1))),logical(1))]
     lapply(r,function(o) {
       o$raw_label<-if(is.null(o$raw_label)) o$ai_morph else o$raw_label
       if(!legacy_mode() || identical(input$acceptance_mode,'manual')) {

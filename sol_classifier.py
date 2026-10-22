@@ -183,7 +183,7 @@ class Worker:
             from project_model import aggregate
             morph,reason,extra=aggregate(photos,self.recipe)
         else:morph,reason=combine_photos(photos);extra={}
-        return dict(**extra,id=str(row['id']),ai_morph=morph,reason=reason,photos=photos,model=MODEL,config_id=self.config_id,classified_at=datetime.now(timezone.utc).isoformat(),photo_ids=[str(p['id']) for p in row.get('photos',[])])
+        return dict(**extra,photo_mode=row.get('photo_mode','all'),id=str(row['id']),ai_morph=morph,reason=reason,photos=photos,model=MODEL,config_id=self.config_id,classified_at=datetime.now(timezone.utc).isoformat(),photo_ids=[str(p['id']) for p in row.get('photos',[])])
 
     def run(self,queue,output):
         existing=read_json(output,[]); results={str(r['id']):r for r in existing}
