@@ -54,6 +54,8 @@ Each project has separate labels, photos, classifier versions, cached API answer
 
 Choose a region and **Load observations**, or expand **Or upload your own photos**. JPEG, PNG and WebP are supported. Research Grade only is on by default for iNaturalist; local uploads have no iNaturalist grade and remain eligible. Older saved records with unknown grades must be reloaded before appearing under that filter.
 
+The loader requests only the observation/photo fields needed by the app. Completed region searches are saved per species, region and grade filter: **Load observations** reopens that snapshot, and **Refresh** fetches current data and quality grades. The snapshot date is shown. Only completed imports become reusable region snapshots; stopping an import keeps its current records without labeling the region complete. Photos are downloaded when viewed or classified, not during metadata import.
+
 Use the photo viewer and zoom controls. Click a category to save your label and advance. Notes are optional; saving notes never confirms an AI suggestion. Label at least 5 independent observations per category to prepare a demonstration, and aim for 50+ per category for useful evaluation. Include varied lighting, poses and backgrounds. Label only what is actually visible.
 
 ## 2. Train / build a classifier recipe
@@ -107,6 +109,7 @@ No photos, labels, trained recipes, cached answers or historical evaluation data
 ```sh
 .venv/bin/python -m unittest test_sol_classifier.py test_project_model.py
 Rscript check.R
+Rscript check_loader.R
 ```
 
 Tests use temporary data, synthetic photographs and mocked API responses. They cover independent splits, duplicate grouping, versioned caches, API failures, stop/resume, confidence gates, per-project data isolation, custom categories, grade filtering, manual priority and private key-file permissions. No API key or paid request is required for these checks. They verify execution and data handling, not biological accuracy on arbitrary species.

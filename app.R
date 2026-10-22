@@ -16,8 +16,9 @@ observation_query <- function(place='', before=NULL,research_only=TRUE,taxon_id=
 }
 fetch_salamander_batch <- function(place='', before=NULL,research_only=TRUE,taxon_id='27186') {
   query <- observation_query(place,before,research_only,taxon_id)
-  response <- RETRY('GET', 'https://api.inaturalist.org/v1/observations', query=query,
-    timeout(30), user_agent('SalamanderMorphReview/1.0'), times=3, quiet=TRUE)
+  query$fields <- jsonlite::toJSON(list(id=TRUE,quality_grade=TRUE,location=TRUE,place_guess=TRUE,observed_on=TRUE,user=list(login=TRUE),obscured=TRUE,uri=TRUE,photos=list(id=TRUE,url=TRUE,attribution=TRUE)),auto_unbox=TRUE)
+  response <- RETRY('GET', 'https://api.inaturalist.org/v2/observations', query=query,
+    timeout(30), user_agent('aiNAT/1.0'), times=3, quiet=TRUE)
   stop_for_status(response)
   fromJSON(content(response, 'text', encoding='UTF-8'), simplifyVector=FALSE)
 }
@@ -28,7 +29,7 @@ observation_rows <- function(observations) {
     coords <- strsplit(value(o$location),',',fixed=TRUE)[[1]]
     if(!length(o$photos)) return(NULL)
     if(length(coords)!=2) coords <- c(NA_character_, NA_character_)
-    data.frame(id=as.character(o$id), latitude=as.numeric(coords[1]), longitude=as.numeric(coords[2]), locality=value(o$place_guess), date=value(o$observed_on), observer=value(o$user$login), quality_grade=value(o$quality_grade,'unknown'), obscured=isTRUE(o$coordinates_obscured), url=value(o$uri), stringsAsFactors=FALSE)
+    data.frame(id=as.character(o$id), latitude=as.numeric(coords[1]), longitude=as.numeric(coords[2]), locality=value(o$place_guess), date=value(o$observed_on), observer=value(o$user$login), quality_grade=value(o$quality_grade,'unknown'), obscured=isTRUE(o$coordinates_obscured)||isTRUE(o$obscured), url=value(o$uri), stringsAsFactors=FALSE)
   })
   rows <- Filter(Negate(is.null), rows)
   if(!length(rows)) return(observation_rows(list()))
@@ -72,9 +73,9 @@ server <- function(input,output,session) {
   all_records <- reactive({
     d<-rows();if(!identical(input$research_only,FALSE)) d<-d[d$quality_grade %in% c('research','local'),,drop=FALSE]
     l<-labels();idx<-match(d$id,l$id);d$manual_morph<-l$morph[idx];d$manual_morph[is.na(d$manual_morph)]<-'unclassified';d$notes<-l$notes[idx];d$notes[is.na(d$notes)]<-''
-    predictions<-active_predictions();lookup<-setNames(predictions,vapply(predictions,function(o) as.character(o$id),character(1)))
-    d$ai_morph<-vapply(d$id,function(id) if(is.null(lookup[[id]])) 'unclassified' else lookup[[id]]$ai_morph,character(1))
-    d$confidence<-vapply(d$id,function(id) if(is.null(lookup[[id]]$confidence)) NA_real_ else as.numeric(lookup[[id]]$confidence),numeric(1))
+    predictions<-active_predictions();pi<-match(d$id,vapply(predictions,function(o) as.character(o$id),character(1)))
+    d$ai_morph<-vapply(predictions,function(o) o$ai_morph,character(1))[pi];d$ai_morph[is.na(d$ai_morph)]<-'unclassified'
+    d$confidence<-vapply(predictions,function(o) if(is.null(o$confidence)) NA_real_ else as.numeric(o$confidence),numeric(1))[pi]
     d$morph<-ifelse(d$manual_morph!='unclassified',d$manual_morph,d$ai_morph);d$label_source<-ifelse(d$manual_morph!='unclassified','Human',ifelse(d$ai_morph!='unclassified','Sol','Unclassified'));d
   })
   review_records <- reactive({
@@ -121,28 +122,54 @@ server <- function(input,output,session) {
     cs<-c('All regions'='', 'Michigan (MI)'='29',setNames(vapply(places,function(p) as.character(p$id),character(1)),vapply(places,function(p) p$display_name,character(1))));cs<-cs[!duplicated(unname(cs))];region_choices(cs);updateSelectInput(session,'region',choices=cs,selected=as.character(places[[1]]$id))
   },error=function(e) showNotification(conditionMessage(e),type='error')))
   observeEvent(input$stop_load,{generation<<-generation+1L;loading(FALSE);save_loaded();load_status(sprintf('Stopped. %d observations retained.',nrow(rows())))})
-  observeEvent(input$fetch,{
-    taxon<-project()$species$id;if(!length(taxon) || !nzchar(taxon)) {showNotification('Choose an iNaturalist species in project settings first, or upload local photos.',type='error');return()}
+  load_observations<-function(refresh=FALSE) {
+    taxon<-project()$species$id;if(!length(taxon)||!nzchar(taxon)) {showNotification('Choose an iNaturalist species first, or upload local photos.',type='error');return()}
     generation<<-generation+1L;token<-generation;scope<-project()$id;research_only<-!identical(input$research_only,FALSE);place<-input$region;cursor<-NULL
-    accumulated<-Filter(function(o) identical(o$quality_grade,'local'),raw());loading(TRUE);load_status('Loading observations…')
+    if(is.null(place)) place<-''
+    cache_name<-paste0(gsub('[^0-9]','',taxon),'_',if(nzchar(place)) gsub('[^0-9]','',place) else 'all','_',if(research_only) 'research' else 'all-grades','.json')
+    cache_path<-data_file(file.path('observation-cache',cache_name))
+    accumulated<-Filter(function(o) identical(o$quality_grade,'local'),raw());current_rows<-observation_rows(accumulated)
+    if(!refresh && file.exists(cache_path)) {
+      snapshot<-read_saved(cache_path,NULL)
+      if(!is.null(snapshot)&&isTRUE(snapshot$complete)) {
+        combined<-c(accumulated,snapshot$observations);ids<-vapply(combined,function(o) as.character(o$id),character(1));combined<-combined[!duplicated(ids)]
+        raw(combined);rows(observation_rows(combined));selected(next_review_id());loading(FALSE);save_loaded()
+        load_status(sprintf('%d observations from saved region snapshot (%s). Refresh checks for updates.',length(snapshot$observations),snapshot$loaded_at));return()
+      }
+    }
+    page_received<-FALSE
+    loading(TRUE);load_status('Loading compact observation records…')
     step<-function() {
-      if(token!=generation || scope!=project()$id || session$isClosed()) return()
+      if(token!=generation||scope!=project()$id||session$isClosed()) return()
       tryCatch({
         result<-fetch_salamander_batch(place,cursor,research_only,taxon)
-        batch<-lapply(result$results,function(o) list(id=o$id,quality_grade=o$quality_grade,location=o$location,place_guess=o$place_guess,observed_on=o$observed_on,user=list(login=o$user$login),coordinates_obscured=o$coordinates_obscured,uri=o$uri,photos=lapply(o$photos,function(p) list(id=p$id,url=p$url,attribution=p$attribution))))
+        if(!page_received) {page_received<<-TRUE;raw(accumulated);rows(current_rows);selected(NULL)}
+        batch<-lapply(result$results,function(o) list(id=o$id,quality_grade=o$quality_grade,location=o$location,place_guess=o$place_guess,observed_on=o$observed_on,user=list(login=o$user$login),coordinates_obscured=isTRUE(o$obscured)||isTRUE(o$coordinates_obscured),uri=o$uri,photos=lapply(o$photos,function(p) list(id=p$id,url=p$url,attribution=p$attribution))))
         if(length(batch)) {
-          accumulated<<-c(accumulated,batch);ids<-vapply(accumulated,function(o) as.character(o$id),character(1));accumulated<<-accumulated[!duplicated(ids)];raw(accumulated);rows(observation_rows(accumulated));if(is.null(selected()) || !selected() %in% all_records()$id) selected(next_review_id())
-          new_cursor<-min(vapply(batch,function(o) as.numeric(o$id),numeric(1)));if(!is.null(cursor) && new_cursor>=cursor) stop('Pagination did not advance.');cursor<<-new_cursor
+          # Build rows for the new page only; don't reconstruct every earlier row.
+          new_rows<-observation_rows(batch);new_rows<-new_rows[!new_rows$id %in% current_rows$id,,drop=FALSE]
+          new_ids<-new_rows$id;batch<-Filter(function(o) as.character(o$id) %in% new_ids,batch)
+          accumulated<<-c(accumulated,batch);current_rows<<-rbind(current_rows,new_rows)
+          raw(accumulated);rows(current_rows);if(is.null(selected())||!selected() %in% all_records()$id) selected(next_review_id())
+          new_cursor<-min(vapply(result$results,function(o) as.numeric(o$id),numeric(1)))
+          if(!is.null(cursor)&&new_cursor>=cursor) stop('Pagination did not advance.');cursor<<-new_cursor
         }
-        load_status(sprintf('%d retained%s',length(accumulated),if(length(batch)) ' · loading…' else ' · complete'))
-        if(length(batch)) later::later(function() shiny::withReactiveDomain(session,isolate(step())),1) else {loading(FALSE);save_loaded()}
-      },error=function(e) {loading(FALSE);save_loaded();load_status(paste('Import stopped:',conditionMessage(e)))})
+        finished<-length(result$results)<200
+        load_status(sprintf('%d retained%s',length(accumulated),if(finished) ' · complete' else ' · loading…'))
+        if(!finished) later::later(function() shiny::withReactiveDomain(session,isolate(step())),1)
+        else {
+          loading(FALSE);save_loaded();dir.create(dirname(cache_path),recursive=TRUE,showWarnings=FALSE)
+          write_json(list(complete=TRUE,loaded_at=format(Sys.time(),tz='UTC',usetz=TRUE),query=list(taxon_id=taxon,place_id=place,research_only=research_only),observations=Filter(function(o) !identical(o$quality_grade,'local'),accumulated)),cache_path)
+        }
+      },error=function(e) {loading(FALSE);if(page_received) save_loaded();load_status(paste('Import stopped:',conditionMessage(e)))})
     };step()
-  })
+  }
+  observeEvent(input$fetch,load_observations(FALSE))
+  observeEvent(input$refresh_observations,load_observations(TRUE))
   output$quality_status<-renderText({d<-rows();if(any(d$quality_grade=='unknown')) 'Older records lack quality grades. Reload to include them with Research Grade only.' else if(!identical(input$research_only,FALSE)) 'Research Grade iNaturalist observations + your local uploads.' else 'All observation grades included.'})
   output$load_status<-renderText(load_status());output$status<-renderText({d<-all_records();sprintf('%d shown · %d human labeled',nrow(d),sum(d$manual_morph!='unclassified'))})
   output$map<-renderLeaflet(leaflet(options=leafletOptions(preferCanvas=TRUE)) |> addTiles() |> setView(-95,48,3))
-  observe({d<-review_records();d<-d[is.finite(d$latitude)&is.finite(d$longitude),,drop=FALSE];proxy<-leafletProxy('map') |> clearMarkers() |> clearControls() |> addLegend(colors=unname(colors()),labels=names(choices())[match(names(colors()),unname(choices()))],title='Classification');if(nrow(d)) proxy |> addCircleMarkers(lng=d$longitude,lat=d$latitude,layerId=d$id,radius=6,color='#333',weight=1,fillColor=unname(colors()[d$morph]),fillOpacity=.9,popup=paste0(htmltools::htmlEscape(d$locality),'<br>Category: ',d$morph,'<br>Source: ',d$label_source))})
+  observe({req(identical(input$workspace,'records'));d<-review_records();d<-d[is.finite(d$latitude)&is.finite(d$longitude),,drop=FALSE];proxy<-leafletProxy('map') |> clearMarkers() |> clearControls() |> addLegend(colors=unname(colors()),labels=names(choices())[match(names(colors()),unname(choices()))],title='Classification');if(nrow(d)) proxy |> addCircleMarkers(lng=d$longitude,lat=d$latitude,layerId=d$id,radius=6,color='#333',weight=1,fillColor=unname(colors()[d$morph]),fillOpacity=.9,popup=paste0(htmltools::htmlEscape(d$locality),'<br>Category: ',d$morph,'<br>Source: ',d$label_source))})
   observeEvent(input$map_marker_click,{selected(input$map_marker_click$id);updateTabsetPanel(session,'workspace',selected='photos')})
   output$records<-renderDT(datatable(review_records(),selection='single',rownames=FALSE,options=list(pageLength=10,scrollX=TRUE)))
   observeEvent(input$records_rows_selected,{d<-review_records();i<-input$records_rows_selected;if(length(i)&&i[1]<=nrow(d)) {selected(d$id[i[1]]);updateTabsetPanel(session,'workspace',selected='photos')}})

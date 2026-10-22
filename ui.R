@@ -10,7 +10,7 @@ ui <- fluidPage(
     textInput('region_search','Find a new region','',placeholder='State, county, or city'),actionButton('find_region','Search regions'),
     tags$p(class='muted small','Search, choose a match in Region, then load observations.'),
     checkboxInput('research_only','Research Grade only (iNaturalist)',value=TRUE),textOutput('quality_status'),
-    tags$div(class='button-row',actionButton('fetch','Load observations',class='btn-primary'),actionButton('stop_load','Stop')),textOutput('load_status'),
+    tags$div(class='button-row',actionButton('fetch','Load observations',class='btn-primary'),actionButton('stop_load','Stop'),actionButton('refresh_observations','Refresh')),textOutput('load_status'),
     tags$details(tags$summary('Or upload your own photos'),fileInput('local_photos','Add images to this project',multiple=TRUE,accept=c('image/jpeg','image/png','image/webp')),tags$p(class='muted small','Local photos have no iNaturalist quality grade.')),
     tags$hr(),selectInput('queue_filter','Review queue',c('All observations'='all','Needs AI classification'='unprocessed','AI needs review'='uncertain','AI awaiting confirmation'='suggested','Human labeled'='confirmed')),
     uiOutput('category_filter'),textOutput('status'),tags$hr(),actionButton('api_setup','Set up my API key'),textOutput('key_status')

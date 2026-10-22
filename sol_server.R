@@ -11,7 +11,7 @@ photo_data<-reactive({
       img<-if(file.exists(saved)) magick::image_read(saved) else read_analysis_image(sub('/square\\.','/large.',photo$url))
     };list(img=img,photo=photo,id=selected())
   },error=function(e) shiny::validate(shiny::need(FALSE,'Photo unavailable. Try another photo.')))
-})
+}) |> bindCache(project()$id,selected(),input$photo_index,cache='session')
 output$analysis_image<-renderImage({d<-photo_data();path<-tempfile(fileext='.png');info<-magick::image_info(d$img);magick::image_write(d$img,path,format='png');list(src=path,contentType='image/png',width=round(info$width*photo_zoom()),height=round(info$height*photo_zoom()),alt='Species observation photo')},deleteFile=TRUE)
 current_prediction<-reactive({hit<-Filter(function(o) identical(as.character(o$id),selected()),active_predictions());if(length(hit)) hit[[1]] else NULL})
 output$current_ai<-renderUI({
@@ -25,11 +25,14 @@ output$ai_actions<-renderUI({d<-current();r<-current_prediction();j<-job();busy<
 })
 observeEvent(input$accept_ai,{r<-current_prediction();if(!is.null(r)&&r$ai_morph %in% keys()) save_label(r$ai_morph,TRUE)})
 queue<-reactive({
-  excluded<-labels()$id[labels()$morph!='unclassified'];eligible<-all_records()$id
-  # Teaching and held-out observations remain labeled and are excluded from ordinary batch jobs.
-  r<-ai_results();lookup<-setNames(r,vapply(r,function(o) as.character(o$id),character(1)))
-  Filter(function(o) {id<-as.character(o$id);if(!id %in% eligible || id %in% excluded) return(FALSE);old<-lookup[[id]]
-    if(!is.null(old)&&identical(old$config_id,expected_config_id())&&setequal(as.character(unlist(old$photo_ids)),vapply(o$photos,function(p) as.character(p$id),character(1)))) return(FALSE);TRUE},raw())
+  excluded<-labels()$id[labels()$morph!='unclassified'];eligible<-all_records()$id;observations<-raw()
+  ids<-vapply(observations,function(o) as.character(o$id),character(1));keep<-ids %in% eligible & !ids %in% excluded
+  completed<-ai_results();index<-match(ids,vapply(completed,function(o) as.character(o$id),character(1)))
+  for(i in which(keep & !is.na(index))) {
+    old<-completed[[index[i]]]
+    if(identical(old$config_id,expected_config_id())&&setequal(as.character(unlist(old$photo_ids)),vapply(observations[[i]]$photos,function(p) as.character(p$id),character(1)))) keep[i]<-FALSE
+  }
+  observations[keep]
 })
 run_limits<-reactive({n<-suppressWarnings(as.integer(input$batch_limit));if(length(n)!=1||is.na(n)||n<1||n>10000) n<-100;cost<-suppressWarnings(as.numeric(input$cost_limit));if(length(cost)!=1||!is.finite(cost)||cost<=0||cost>100) cost<-2;list(n=n,cost=cost)})
 output$batch_estimate<-renderText({q<-head(queue(),run_limits()$n);photos<-sum(vapply(q,function(o) length(o$photos),integer(1)));mult<-if(is.null(recipe())) 1 else 1+length(recipe()$examples);sprintf('%d eligible observations · %d photos. Rough estimate $%.2f; examples and token usage affect cost.',length(q),photos,photos*.528854/315*mult)})
