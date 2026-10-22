@@ -34,7 +34,7 @@ queue<-reactive({
   }
   observations[keep]
 })
-run_limits<-reactive({n<-suppressWarnings(as.integer(input$batch_limit));if(length(n)!=1||is.na(n)||n<1||n>10000) n<-100;cost<-suppressWarnings(as.numeric(input$cost_limit));if(length(cost)!=1||!is.finite(cost)||cost<=0||cost>100) cost<-2;list(n=n,cost=cost)})
+run_limits<-reactive({n<-suppressWarnings(as.numeric(input$batch_limit));if(length(n)!=1||!is.finite(n)||n<1) n<-100 else n<-floor(n);cost<-suppressWarnings(as.numeric(input$cost_limit));if(length(cost)!=1||!is.finite(cost)||cost<=0||cost>100) cost<-2;list(n=n,cost=cost)})
 output$batch_estimate<-renderText({q<-head(queue(),run_limits()$n);photos<-sum(vapply(q,function(o) length(selected_photos(o)),integer(1)));mult<-if(is.null(recipe())) 1 else 1+length(recipe()$examples);sprintf('%d eligible observations · %d photos. Rough estimate $%.2f; examples and token usage affect cost.',length(q),photos,photos*.528854/315*mult)})
 key_version<-reactiveVal(0L)
 output$key_status<-renderText({key_version();if(file.exists(api_key_path())||nzchar(Sys.getenv('OPENAI_API_KEY'))) 'Your API key is configured locally.' else 'Add your own OpenAI API key to use Sol.'})

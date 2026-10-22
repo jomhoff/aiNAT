@@ -6,6 +6,10 @@ stopifnot(observation_query('29',100)$quality_grade=='research',observation_quer
 read_analysis_image<-function(url) magick::image_blank(50,50,color='#bc4835')
 shiny::testServer(app$serverFuncSource(),{
   session$setInputs(research_only=FALSE,review_filter=c('red_backed','lead_backed','unclassified','cant_tell'),queue_filter='all',photo_index='1',notes='',batch_limit=100,cost_limit=2,ai_result_filter='all',acceptance_mode='validated')
+  session$setInputs(batch_limit=100000);stopifnot(run_limits()$n==100000)
+  session$setInputs(batch_limit=3000000000);stopifnot(run_limits()$n==3000000000)
+  session$setInputs(batch_limit=0);stopifnot(run_limits()$n==100)
+  session$setInputs(batch_limit=100)
   obs<-lapply(1:3,function(i) list(id=i,quality_grade='research',location='42,-84',photos=list(list(id=100+i,url='https://example.com/x.jpg',attribution='Fixture'))))
   raw(obs);rows(observation_rows(obs));selected('1');session$flushReact();stopifnot(length(queue())==3)
   multi<-obs;multi[[1]]$photos<-c(multi[[1]]$photos,list(list(id=999,url='https://example.com/extra.jpg',attribution='Fixture')))
